@@ -705,6 +705,9 @@ class PlayerViewModel @Inject constructor(
     private var artistNavigationJob: Job? = null
     private var fullQueuePlaybackJob: Job? = null
     private var fullQueuePlaybackToken: Long = 0L
+    private var directPlaybackJob: Job? = null
+    private var directPlaybackToken: Long = 0L
+    private var pendingQueueSegmentsJob: Job? = null
 
     fun requestLocateCurrentSong() {
         val currentSong = stablePlayerState.value.currentSong ?: return
@@ -792,6 +795,7 @@ class PlayerViewModel @Inject constructor(
         sortedIdsProvider: suspend () -> List<Long>
     ) {
         cancelPendingFullQueuePlayback()
+        cancelPendingDirectPlayback()
         val requestToken = fullQueuePlaybackToken
 
         fullQueuePlaybackJob = viewModelScope.launch {
@@ -840,6 +844,29 @@ class PlayerViewModel @Inject constructor(
     private fun throwIfFullQueuePlaybackRequestIsStale(requestToken: Long) {
         if (requestToken != fullQueuePlaybackToken) {
             throw CancellationException("Stale full-queue playback request")
+        }
+    }
+
+    private fun beginDirectPlaybackRequest(): Long {
+        directPlaybackToken += 1L
+        directPlaybackJob?.cancel()
+        directPlaybackJob = null
+        pendingQueueSegmentsJob?.cancel()
+        pendingQueueSegmentsJob = null
+        return directPlaybackToken
+    }
+
+    private fun cancelPendingDirectPlayback() {
+        directPlaybackToken += 1L
+        directPlaybackJob?.cancel()
+        directPlaybackJob = null
+        pendingQueueSegmentsJob?.cancel()
+        pendingQueueSegmentsJob = null
+    }
+
+    private fun throwIfDirectPlaybackRequestIsStale(requestToken: Long) {
+        if (requestToken != directPlaybackToken) {
+            throw CancellationException("Stale direct playback request")
         }
     }
 
@@ -2216,6 +2243,7 @@ class PlayerViewModel @Inject constructor(
             val queueMatchesContext = currentQueue.matchesSongOrder(playbackContext)
 
             if (songIndexInQueue != -1 && queueMatchesContext) {
+                cancelPendingDirectPlayback()
                 if (controller.currentMediaItemIndex == songIndexInQueue) {
                     if (!controller.isPlaying) controller.play()
                 } else {
@@ -3051,10 +3079,12 @@ class PlayerViewModel @Inject constructor(
     // rebuildPlayerQueue functionality moved to PlaybackStateHolder (simplified)
     fun playSongs(songsToPlay: List<Song>, startSong: Song, queueName: String = "None", playlistId: String? = null) {
         cancelPendingFullQueuePlayback()
-        viewModelScope.launch {
+        val requestToken = beginDirectPlaybackRequest()
+        directPlaybackJob = viewModelScope.launch {
             transitionSchedulerJob?.cancel()
 
             val validSongs = hydrateSongsIfNeeded(songsToPlay)
+            throwIfDirectPlaybackRequestIsStale(requestToken)
 
             if (validSongs.isEmpty()) {
                 _toastEvents.emit(context.getString(R.string.no_valid_songs))
@@ -3077,6 +3107,7 @@ class PlayerViewModel @Inject constructor(
                      if (fileId != null) {
                          val isCached = musicRepository.telegramRepository.isFileCached(fileId)
                          Timber.d("Offline Check: isCached=$isCached")
+                         throwIfDirectPlaybackRequestIsStale(requestToken)
                          if (!isCached) {
                              Timber.w("Blocked playback: Offline and not cached.")
                              _showNoInternetDialog.tryEmit(Unit)
@@ -3092,6 +3123,7 @@ class PlayerViewModel @Inject constructor(
 
             // Check if the user wants shuffle to be persistent across different albums
             val isPersistent = userPreferencesRepository.persistentShuffleEnabledFlow.first()
+            throwIfDirectPlaybackRequestIsStale(requestToken)
             // Check if shuffle is currently active in the player
             val isShuffleOn = playbackStateHolder.stablePlayerState.value.isShuffleEnabled
 
@@ -3113,9 +3145,13 @@ class PlayerViewModel @Inject constructor(
                 // Otherwise, just use the normal sequential order
                 validSongs
             }
+            throwIfDirectPlaybackRequestIsStale(requestToken)
 
             // Send the final list (shuffled or not) to the player engine
             internalPlaySongs(finalSongsToPlay, validStartSong, queueName, playlistId)
+            if (requestToken == directPlaybackToken) {
+                directPlaybackJob = null
+            }
         }
     }
 
@@ -3127,8 +3163,10 @@ class PlayerViewModel @Inject constructor(
         startAtZero: Boolean = false
     ) {
         cancelPendingFullQueuePlayback()
-        viewModelScope.launch {
+        val requestToken = beginDirectPlaybackRequest()
+        directPlaybackJob = viewModelScope.launch {
             val result = queueStateHolder.prepareShuffledQueueSuspending(songsToPlay, queueName, startAtZero)
+            throwIfDirectPlaybackRequestIsStale(requestToken)
             if (result == null) {
                 sendToast(context.getString(R.string.player_no_songs_to_shuffle))
                 return@launch
@@ -3142,6 +3180,9 @@ class PlayerViewModel @Inject constructor(
             launch { userPreferencesRepository.setShuffleOn(true) }
 
             internalPlaySongs(shuffledQueue, startSong, queueName, playlistId)
+            if (requestToken == directPlaybackToken) {
+                directPlaybackJob = null
+            }
         }
     }
 
@@ -3206,8 +3247,12 @@ class PlayerViewModel @Inject constructor(
         // Skip the "Preparing playback…" pill for local files: they reach STATE_READY
         // in milliseconds, and transient STATE_BUFFERING from audio HAL/offload init
         // (or a re-tap of an already-loaded song) can otherwise leave the pill stuck.
+        // Always write the new value (null for local, song.id for remote) so a stale
+        // preparingSongId from a previous remote song cannot outlive a local track switch.
         if (!isLocalPlaybackSong(song)) {
             setPreparingSong(song.id)
+        } else {
+            setPreparingSong(null)
         }
         viewModelScope.launch(Dispatchers.IO) {
             val albumArtUri = song.albumArtUriString
@@ -3363,7 +3408,8 @@ class PlayerViewModel @Inject constructor(
                 _playerUiState.update { it.copy(isLoadingInitialSongs = false) }
 
                 if (songsToPlay.size > 1) {
-                    viewModelScope.launch {
+                    pendingQueueSegmentsJob?.cancel()
+                    pendingQueueSegmentsJob = viewModelScope.launch {
                         val preparedSegments = preparePlaybackQueueSegments(
                             songsToPlay = songsToPlay,
                             startSongId = effectiveStartSong.id,

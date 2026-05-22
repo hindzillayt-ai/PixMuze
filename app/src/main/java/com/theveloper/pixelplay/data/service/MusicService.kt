@@ -72,7 +72,6 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import timber.log.Timber
 import com.theveloper.pixelplay.data.equalizer.EqualizerManager
@@ -184,6 +183,7 @@ class MusicService : MediaLibraryService() {
     private var observedCastSession: CastSession? = null
     private var activeCastStatsOccurrenceId: String? = null
     private var playbackSnapshotPersistJob: Job? = null
+    private var playbackSnapshotUnloadWriteJob: Job? = null
     private var isRestoringPlaybackSnapshot = false
     private var isPlaybackUnloadInProgress = false
     private val audioManager by lazy {
@@ -2918,9 +2918,9 @@ class MusicService : MediaLibraryService() {
         endOfTrackTimerSongId = null
 
         if (preservePlaybackSnapshot) {
-            persistPlaybackSnapshotBlocking()
+            persistPlaybackSnapshotOnUnload()
         } else {
-            clearPlaybackSnapshotBlocking()
+            clearPlaybackSnapshotOnUnload()
         }
 
         listeningStatsTracker.finalizeCurrentSession(forceSynchronousPersistence = true)
@@ -2935,22 +2935,23 @@ class MusicService : MediaLibraryService() {
         stopSelf()
     }
 
-    private fun persistPlaybackSnapshotBlocking() {
+    private fun persistPlaybackSnapshotOnUnload() {
         val snapshot = capturePlaybackSnapshotFromPlayer(playWhenReadyOverride = false)
-        writePlaybackSnapshotBlocking(snapshot)
+        writePlaybackSnapshotOnUnload(snapshot)
     }
 
-    private fun clearPlaybackSnapshotBlocking() {
-        writePlaybackSnapshotBlocking(null)
+    private fun clearPlaybackSnapshotOnUnload() {
+        writePlaybackSnapshotOnUnload(null)
     }
 
-    private fun writePlaybackSnapshotBlocking(snapshot: PlaybackQueueSnapshot?) {
-        runCatching {
-            runBlocking(Dispatchers.IO) {
+    private fun writePlaybackSnapshotOnUnload(snapshot: PlaybackQueueSnapshot?) {
+        playbackSnapshotUnloadWriteJob?.cancel()
+        playbackSnapshotUnloadWriteJob = appScope.launch {
+            runCatching {
                 userPreferencesRepository.setPlaybackQueueSnapshot(snapshot)
+            }.onFailure { e ->
+                Timber.tag(TAG).w(e, "Failed to persist playback snapshot during unload")
             }
-        }.onFailure { e ->
-            Timber.tag(TAG).w(e, "Failed to persist playback snapshot during unload")
         }
     }
 
