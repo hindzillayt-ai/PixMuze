@@ -777,10 +777,10 @@ fun SearchResultsList(
                     key = { index ->
                         val item = itemsForSection[index]
                         when (item) {
-                            is SearchResultItem.SongItem -> "song_${item.song.id}"
-                            is SearchResultItem.AlbumItem -> "album_${item.album.id}"
-                            is SearchResultItem.ArtistItem -> "artist_${item.artist.id}"
-                            is SearchResultItem.PlaylistItem -> "playlist_${item.playlist.id}_${index}"
+                            is SearchResultItem.SongItem -> "song_${item.song.id}_$index"
+                            is SearchResultItem.AlbumItem -> "album_${item.album.id}_$index"
+                            is SearchResultItem.ArtistItem -> "artist_${item.artist.id}_$index"
+                            is SearchResultItem.PlaylistItem -> "playlist_${item.playlist.id}_$index"
                         }
                     },
                     contentType = { index ->

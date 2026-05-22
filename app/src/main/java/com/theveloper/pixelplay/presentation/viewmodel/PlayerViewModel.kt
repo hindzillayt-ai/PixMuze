@@ -4,6 +4,15 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.net.Uri
 import android.os.Trace
+import androidx.work.Constraints
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.workDataOf
+import androidx.work.ExistingWorkPolicy
+import com.theveloper.pixelplay.data.remote.youtube.SongDownloadWorker
+import com.theveloper.pixelplay.data.remote.youtube.PlaylistDownloadWorker
+import kotlinx.coroutines.flow.first
 import android.media.MediaMetadataRetriever
 import android.util.Log
 import androidx.compose.animation.core.Animatable
@@ -220,6 +229,7 @@ class PlayerViewModel @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val musicRepository: MusicRepository,
     private val userPreferencesRepository: UserPreferencesRepository,
+    private val youtubeDatastoreRepository: com.theveloper.pixelplay.data.remote.youtube.DatastoreRepository,
     private val aiPreferencesRepository: AiPreferencesRepository,
     private val themePreferencesRepository: ThemePreferencesRepository,
     private val albumArtThemeDao: AlbumArtThemeDao,
@@ -2905,6 +2915,40 @@ class PlayerViewModel @Inject constructor(
                                 themeStateHolder.extractAndGenerateColorScheme(uri, currentUri)
                             }
                             loadLyricsForCurrentSong()
+
+                            // Component 27: Pre-cache recently played YouTube songs in background
+                            val youtubeId = currentSongValue.youtubeId
+                            if (youtubeId != null && currentSongValue.path.isBlank()) {
+                                viewModelScope.launch(Dispatchers.IO) {
+                                    try {
+                                        val ytSong = com.theveloper.pixelplay.data.model.youtube.Song(
+                                            youtubeId = youtubeId,
+                                            title = currentSongValue.title,
+                                            artist = currentSongValue.artist,
+                                            thumbnailHref = currentSongValue.albumArtUriString ?: ""
+                                        )
+                                        // Pre-resolve and cache the stream URL in LRU cache
+                                        val url = com.theveloper.pixelplay.data.remote.youtube.YoutubeHelper.getSongPlayerUrl(context, ytSong)
+                                        com.theveloper.pixelplay.data.remote.youtube.YoutubeHelper.streamUrlLruCache.put("${youtubeId}_high", url)
+
+                                        // If on WiFi, download audio file for permanent cache
+                                        if (connectivityStateHolder.isMeteredNetwork.value == false) {
+                                            val audioPath = com.theveloper.pixelplay.data.remote.youtube.DownloadHelper.downloadAudio(context, ytSong)
+                                            if (audioPath != null) {
+                                                // Update local YouTube DB
+                                                val ytDb = com.theveloper.pixelplay.data.database.youtube.AppDatabase.getInstance(context)
+                                                ytDb.songRepository().updateAudioPath(youtubeId, audioPath)
+
+                                                // Update unified DB
+                                                val mainId = -(15_000_000_000_000L + youtubeId.hashCode().toLong().absoluteValue)
+                                                musicRepository.updateSongFilePath(mainId, audioPath)
+                                            }
+                                        }
+                                    } catch (e: Exception) {
+                                        Timber.e(e, "Failed to pre-cache recently played song $youtubeId")
+                                    }
+                                }
+                            }
                         }
                     } ?: run {
                         if (!isCastConnecting.value && !isRemotePlaybackActive.value) {
@@ -3463,26 +3507,61 @@ class PlayerViewModel @Inject constructor(
         playbackStateHolder.cycleRepeatMode()
     }
 
-    private suspend fun setFavoriteStatusEverywhere(songId: String, isFavorite: Boolean) {
-        musicRepository.setFavoriteStatus(songId, isFavorite)
+    private suspend fun setFavoriteStatusEverywhere(song: Song, isFavorite: Boolean) {
+        musicRepository.setFavoriteStatusWithMetadata(song, isFavorite)
     }
 
     fun toggleFavorite() {
         val currentSong = playbackStateHolder.stablePlayerState.value.currentSong ?: return
-        val songId = currentSong.id
         viewModelScope.launch {
-            val currentlyFavorite = favoriteSongIds.value.contains(songId)
-            setFavoriteStatusEverywhere(songId, !currentlyFavorite)
+            val currentlyFavorite = favoriteSongIds.value.contains(currentSong.id)
+            val targetFavoriteState = !currentlyFavorite
+            setFavoriteStatusEverywhere(currentSong, targetFavoriteState)
 
-            // Component 30: For YouTube songs, mark as permanently stored when liked
-            if (!currentlyFavorite && currentSong.contentUriString?.startsWith("youtube://") == true) {
+            // Component 30 & 26: For YouTube songs, sync to YT account, mark as permanently stored and download if liked
+            val videoId = currentSong.youtubeId ?: if (currentSong.contentUriString?.startsWith("youtube://") == true) {
+                currentSong.contentUriString.substringAfter("youtube://")
+            } else if (currentSong.id.startsWith("youtube_")) {
+                currentSong.id.substringAfter("youtube_")
+            } else {
+                null
+            }
+
+            if (videoId != null) {
                 launch(Dispatchers.IO) {
                     try {
-                        val videoId = currentSong.contentUriString.substringAfter("youtube://")
-                        val appDb = com.theveloper.pixelplay.data.database.youtube.AppDatabase.getInstance(context)
-                        appDb.songRepository().markAsPermanentlyDownloaded(videoId)
+                        val settings = youtubeDatastoreRepository.settings.first()
+                        if (targetFavoriteState) {
+                            com.theveloper.pixelplay.data.remote.youtube.YoutubeRequestHelper.like(videoId, settings)
+                        } else {
+                            com.theveloper.pixelplay.data.remote.youtube.YoutubeRequestHelper.removeLike(videoId, settings)
+                        }
                     } catch (e: Exception) {
-                        Timber.w(e, "Failed to mark YouTube song as permanently downloaded")
+                        Timber.e(e, "Failed to sync like state to YouTube for song $videoId")
+                    }
+                }
+
+                if (targetFavoriteState) {
+                    launch(Dispatchers.IO) {
+                        try {
+                            val appDb = com.theveloper.pixelplay.data.database.youtube.AppDatabase.getInstance(context)
+                            appDb.songRepository().markAsPermanentlyDownloaded(videoId)
+                        } catch (e: Exception) {
+                            Timber.w(e, "Failed to mark YouTube song as permanently downloaded")
+                        }
+                    }
+
+                    // Component 26: Cache liked songs offline
+                    val shouldCache = userPreferencesRepository.cacheLikedSongsOfflineFlow.first()
+                    if (shouldCache) {
+                        val workRequest = OneTimeWorkRequestBuilder<SongDownloadWorker>()
+                            .setInputData(workDataOf(SongDownloadWorker.SONG_KEY to videoId))
+                            .setConstraints(Constraints.Builder()
+                                .setRequiredNetworkType(NetworkType.CONNECTED)
+                                .build())
+                            .build()
+                        WorkManager.getInstance(context)
+                            .enqueueUniqueWork("dl_liked_$videoId", ExistingWorkPolicy.KEEP, workRequest)
                     }
                 }
             }
@@ -3493,24 +3572,79 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             val currentlyFavorite = favoriteSongIds.value.contains(song.id)
             val targetFavoriteState = if (removing) false else !currentlyFavorite
-            setFavoriteStatusEverywhere(song.id, targetFavoriteState)
+            setFavoriteStatusEverywhere(song, targetFavoriteState)
 
-            // Component 30: For YouTube songs, mark as permanently stored when liked
-            if (targetFavoriteState && song.contentUriString?.startsWith("youtube://") == true) {
+            // Component 30 & 26: For YouTube songs, sync to YT account, mark as permanently stored and download if liked
+            val videoId = song.youtubeId ?: if (song.contentUriString?.startsWith("youtube://") == true) {
+                song.contentUriString.substringAfter("youtube://")
+            } else if (song.id.startsWith("youtube_")) {
+                song.id.substringAfter("youtube_")
+            } else {
+                null
+            }
+
+            if (videoId != null) {
                 launch(Dispatchers.IO) {
                     try {
-                        val videoId = song.contentUriString.substringAfter("youtube://")
-                        val appDb = com.theveloper.pixelplay.data.database.youtube.AppDatabase.getInstance(context)
-                        val ytSong = appDb.songRepository().getSong(videoId)
-                        if (ytSong != null) {
-                            // Mark as permanently downloaded so it's never auto-deleted
-                            appDb.songRepository().markAsPermanentlyDownloaded(videoId)
+                        val settings = youtubeDatastoreRepository.settings.first()
+                        if (targetFavoriteState) {
+                            com.theveloper.pixelplay.data.remote.youtube.YoutubeRequestHelper.like(videoId, settings)
+                        } else {
+                            com.theveloper.pixelplay.data.remote.youtube.YoutubeRequestHelper.removeLike(videoId, settings)
                         }
                     } catch (e: Exception) {
-                        Timber.w(e, "Failed to mark YouTube song as permanently downloaded")
+                        Timber.e(e, "Failed to sync like state to YouTube for song $videoId")
+                    }
+                }
+
+                if (targetFavoriteState) {
+                    launch(Dispatchers.IO) {
+                        try {
+                            val appDb = com.theveloper.pixelplay.data.database.youtube.AppDatabase.getInstance(context)
+                            appDb.songRepository().markAsPermanentlyDownloaded(videoId)
+                        } catch (e: Exception) {
+                            Timber.w(e, "Failed to mark YouTube song as permanently downloaded")
+                        }
+                    }
+
+                    // Component 26: Cache liked songs offline
+                    val shouldCache = userPreferencesRepository.cacheLikedSongsOfflineFlow.first()
+                    if (shouldCache) {
+                        val workRequest = OneTimeWorkRequestBuilder<SongDownloadWorker>()
+                            .setInputData(workDataOf(SongDownloadWorker.SONG_KEY to videoId))
+                            .setConstraints(Constraints.Builder()
+                                .setRequiredNetworkType(NetworkType.CONNECTED)
+                                .build())
+                            .build()
+                        WorkManager.getInstance(context)
+                            .enqueueUniqueWork("dl_liked_$videoId", ExistingWorkPolicy.KEEP, workRequest)
                     }
                 }
             }
+        }
+    }
+
+    fun downloadPlaylistSongs(playlistId: String, songIds: List<String>) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val workRequest = OneTimeWorkRequestBuilder<PlaylistDownloadWorker>()
+                .setInputData(
+                    workDataOf(
+                        PlaylistDownloadWorker.PLAYLIST_KEY to playlistId,
+                        "user_initiated" to true
+                    )
+                )
+                .setConstraints(
+                    Constraints.Builder()
+                        .setRequiredNetworkType(NetworkType.CONNECTED)
+                        .setRequiresStorageNotLow(true)
+                        .build()
+                )
+                .build()
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                "playlist_dl_$playlistId",
+                ExistingWorkPolicy.KEEP,
+                workRequest
+            )
         }
     }
 
@@ -3696,17 +3830,13 @@ class PlayerViewModel @Inject constructor(
         playSelectedAlbums(albums)
     }
 
-    /**
-     * Adds all selected songs to favorites.
-     * Clears selection after liking.
-     */
     fun likeSelectedSongs(songs: List<Song>) {
         viewModelScope.launch {
             val favIds = favoriteSongIds.value.toMutableSet()
             var likedCount = 0
             songs.forEach { song ->
                 if (!favIds.contains(song.id)) {
-                    setFavoriteStatusEverywhere(song.id, true)
+                    setFavoriteStatusEverywhere(song, true)
                     favIds.add(song.id)
                     likedCount++
                 }
@@ -3732,7 +3862,7 @@ class PlayerViewModel @Inject constructor(
             var unlikedCount = 0
             songs.forEach { song ->
                 if (favIds.contains(song.id)) {
-                    setFavoriteStatusEverywhere(song.id, false)
+                    setFavoriteStatusEverywhere(song, false)
                     favIds.remove(song.id)
                     unlikedCount++
                 }

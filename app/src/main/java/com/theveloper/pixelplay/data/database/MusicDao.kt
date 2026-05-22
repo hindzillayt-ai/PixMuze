@@ -103,6 +103,9 @@ interface MusicDao {
     @Query("UPDATE songs SET file_path = :filePath WHERE id = :songId")
     suspend fun updateSongFilePath(songId: Long, filePath: String)
 
+    @Query("UPDATE songs SET genre = :genre WHERE id = :songId")
+    suspend fun updateSongGenre(songId: Long, genre: String)
+
     @Query("SELECT * FROM songs WHERE source_type = :type")
     suspend fun getSongsBySourceType(type: Int): List<SongEntity>
 
@@ -1906,6 +1909,12 @@ interface MusicDao {
             insertSongArtistCrossRefs(chunk)
         }
     }
+
+    @Query("SELECT * FROM songs WHERE genre = :genre AND id != :excludeId ORDER BY RANDOM() LIMIT :limit")
+    suspend fun getSongsByGenre(genre: String, excludeId: Long = 0, limit: Int = 10): List<SongEntity>
+
+    @Query("SELECT * FROM songs WHERE artist_name LIKE '%' || :artistName || '%' ORDER BY RANDOM() LIMIT :limit")
+    suspend fun getSongsByArtistName(artistName: String, limit: Int = 5): List<SongEntity>
 
     companion object {
         /**

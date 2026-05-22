@@ -23,6 +23,7 @@ import com.theveloper.pixelplay.data.preferences.AiPreferencesRepository
 import com.theveloper.pixelplay.data.preferences.AlbumArtQuality
 import com.theveloper.pixelplay.data.preferences.AlbumArtColorAccuracy
 import com.theveloper.pixelplay.data.preferences.AlbumArtPaletteStyle
+import com.theveloper.pixelplay.data.preferences.StreamingAudioQuality
 import com.theveloper.pixelplay.data.preferences.AppLanguage
 import com.theveloper.pixelplay.data.preferences.CollagePattern
 import com.theveloper.pixelplay.data.preferences.FullPlayerLoadingTweaks
@@ -108,7 +109,13 @@ data class SettingsUiState(
     val minTracksPerAlbum: Int = 1,
     val replayGainEnabled: Boolean = false,
     val replayGainUseAlbumGain: Boolean = false,
-    val isSafeTokenLimitEnabled: Boolean = true
+    val isSafeTokenLimitEnabled: Boolean = true,
+    val streamingAudioQualityWifi: StreamingAudioQuality = StreamingAudioQuality.HIGH,
+    val streamingAudioQualityMobile: StreamingAudioQuality = StreamingAudioQuality.LOW,
+    val forceHighQualityOnMobile: Boolean = false,
+    val albumArtQualityMobile: AlbumArtQuality = AlbumArtQuality.LOW,
+    val cacheLikedSongsOffline: Boolean = false,
+    val storageLimitMb: Int = 2048
 )
 
 data class FailedSongInfo(
@@ -683,6 +690,42 @@ class SettingsViewModel @Inject constructor(
                 _uiState.update { it.copy(isSafeTokenLimitEnabled = enabled) }
             }
         }
+
+        viewModelScope.launch {
+            userPreferencesRepository.streamingAudioQualityWifiFlow.collect { quality ->
+                _uiState.update { it.copy(streamingAudioQualityWifi = quality) }
+            }
+        }
+
+        viewModelScope.launch {
+            userPreferencesRepository.streamingAudioQualityMobileFlow.collect { quality ->
+                _uiState.update { it.copy(streamingAudioQualityMobile = quality) }
+            }
+        }
+
+        viewModelScope.launch {
+            userPreferencesRepository.forceHighQualityOnMobileFlow.collect { enabled ->
+                _uiState.update { it.copy(forceHighQualityOnMobile = enabled) }
+            }
+        }
+
+        viewModelScope.launch {
+            userPreferencesRepository.albumArtQualityMobileFlow.collect { quality ->
+                _uiState.update { it.copy(albumArtQualityMobile = quality) }
+            }
+        }
+
+        viewModelScope.launch {
+            userPreferencesRepository.cacheLikedSongsOfflineFlow.collect { enabled ->
+                _uiState.update { it.copy(cacheLikedSongsOffline = enabled) }
+            }
+        }
+
+        viewModelScope.launch {
+            userPreferencesRepository.storageLimitMbFlow.collect { limit ->
+                _uiState.update { it.copy(storageLimitMb = limit) }
+            }
+        }
     }
 
     fun setAppRebrandDialogShown(wasShown: Boolean) {
@@ -1030,6 +1073,42 @@ class SettingsViewModel @Inject constructor(
     fun setMinTracksPerAlbum(minTracks: Int) {
         viewModelScope.launch {
             userPreferencesRepository.setMinTracksPerAlbum(minTracks)
+        }
+    }
+
+    fun setStreamingAudioQualityWifi(quality: StreamingAudioQuality) {
+        viewModelScope.launch {
+            userPreferencesRepository.setStreamingAudioQualityWifi(quality)
+        }
+    }
+
+    fun setStreamingAudioQualityMobile(quality: StreamingAudioQuality) {
+        viewModelScope.launch {
+            userPreferencesRepository.setStreamingAudioQualityMobile(quality)
+        }
+    }
+
+    fun setForceHighQualityOnMobile(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.setForceHighQualityOnMobile(enabled)
+        }
+    }
+
+    fun setAlbumArtQualityMobile(quality: AlbumArtQuality) {
+        viewModelScope.launch {
+            userPreferencesRepository.setAlbumArtQualityMobile(quality)
+        }
+    }
+
+    fun setCacheLikedSongsOffline(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.setCacheLikedSongsOffline(enabled)
+        }
+    }
+
+    fun setStorageLimitMb(limitMb: Int) {
+        viewModelScope.launch {
+            userPreferencesRepository.setStorageLimitMb(limitMb)
         }
     }
 

@@ -48,6 +48,8 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.DragIndicator
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Shuffle
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -168,6 +170,7 @@ fun PlaylistDetailScreen(
     val deletePlaylistLabel = stringResource(R.string.presentation_batch_b_delete_playlist)
     val setDefaultTransitionLabel = stringResource(R.string.presentation_batch_b_set_default_transition)
     val exportPlaylistLabel = stringResource(R.string.presentation_batch_b_export_playlist)
+    val downloadPlaylistLabel = stringResource(R.string.presentation_batch_b_download_playlist)
     val deletePlaylistConfirmTitle = stringResource(R.string.presentation_batch_b_delete_playlist_confirm_title)
     val deletePlaylistConfirmBody = stringResource(R.string.presentation_batch_b_delete_playlist_confirm_body)
     val sortSheetTitle = stringResource(R.string.presentation_batch_b_sort_songs)
@@ -765,6 +768,18 @@ fun PlaylistDetailScreen(
                         m3uExportLauncher.launch("${currentPlaylist?.name ?: fallbackPlaylistName}.m3u")
                     }
                 )
+                if (currentPlaylist?.source == "YOUTUBE") {
+                    PlaylistActionItem(
+                        icon = rememberVectorPainter(Icons.Rounded.Download),
+                        label = downloadPlaylistLabel,
+                        onClick = {
+                            showPlaylistOptionsSheet = false
+                            currentPlaylist.let { playlist ->
+                                playerViewModel.downloadPlaylistSongs(playlist.id, playlist.songIds)
+                            }
+                        }
+                    )
+                }
             }
         }
     }

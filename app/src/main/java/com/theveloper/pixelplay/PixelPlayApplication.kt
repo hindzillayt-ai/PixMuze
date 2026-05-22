@@ -90,7 +90,9 @@ class PixelPlayApplication : Application(), ImageLoaderFactory, Configuration.Pr
 
         // Initialize NewPipe YouTube Extractor
         org.schabi.newpipe.extractor.NewPipe.init(
-            com.theveloper.pixelplay.data.remote.youtube.YoutubeExtractor(okhttp3.OkHttpClient())
+            com.theveloper.pixelplay.data.remote.youtube.YoutubeExtractor(
+                com.theveloper.pixelplay.data.remote.youtube.YoutubeHelper.client
+            )
         )
 
         // Benchmark variant intentionally restarts/kills app process during tests.
@@ -117,6 +119,16 @@ class PixelPlayApplication : Application(), ImageLoaderFactory, Configuration.Pr
         }
 
         ProcessLifecycleOwner.get().lifecycle.addObserver(appLifecycleObserver)
+
+        // DNS pre-warming
+        startupScope.launch {
+            try {
+                java.net.InetAddress.getAllByName("music.youtube.com")
+                java.net.InetAddress.getAllByName("googlevideo.com")
+            } catch (e: Exception) {
+                Timber.w(e, "DNS pre-warming failed")
+            }
+        }
 
         startupScope.launch {
             AlbumArtUtils.migrateLegacyCacheLocation(this@PixelPlayApplication)

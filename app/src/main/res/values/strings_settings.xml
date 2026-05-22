@@ -300,4 +300,22 @@
     <string name="cd_remove_from_history">Remove from history</string>
     <string name="cd_clear_search">Clear search</string>
     <string name="backup_history_modules_line">%1$d modules · v%2$s · schema v%3$d</string>
+
+    <!-- Playback Streaming & Optimization -->
+    <string name="setcat_streaming_title">Streaming &amp; Data Saving</string>
+    <string name="setcat_streaming_audio_quality_wifi_title">WiFi Streaming Quality</string>
+    <string name="setcat_streaming_audio_quality_wifi_desc">Select audio quality when streaming on WiFi networks.</string>
+    <string name="setcat_streaming_audio_quality_mobile_title">Mobile Data Streaming Quality</string>
+    <string name="setcat_streaming_audio_quality_mobile_desc">Select audio quality when streaming on mobile or metered networks.</string>
+    <string name="setcat_force_high_quality_mobile_title">Force high quality on mobile data</string>
+    <string name="setcat_force_high_quality_mobile_desc">Stream in high quality even when connected to mobile or metered networks.</string>
+    <string name="setcat_cache_liked_songs_title">Cache liked songs offline</string>
+    <string name="setcat_cache_liked_songs_desc">Automatically download audio of liked YouTube songs for offline playback.</string>
+    <string name="setcat_album_art_quality_wifi_title">WiFi Album Art Quality</string>
+    <string name="setcat_album_art_quality_wifi_desc">Resolution for downloading and displaying album covers on WiFi.</string>
+    <string name="setcat_album_art_quality_mobile_title">Mobile Album Art Quality</string>
+    <string name="setcat_album_art_quality_mobile_desc">Resolution for downloading and displaying album covers on metered networks.</string>
+    <string name="setcat_music_storage_limit_title">Music Storage Limit</string>
+    <string name="setcat_music_storage_limit_desc">Maximum local storage allocated for downloaded YouTube music.</string>
+    <string name="genre_local_music">Local Music</string>
 </resources>

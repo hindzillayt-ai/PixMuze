@@ -3,6 +3,8 @@ package com.theveloper.pixelplay.presentation.screens
 import com.theveloper.pixelplay.presentation.navigation.navigateSafely
 import com.theveloper.pixelplay.presentation.components.BackupModuleSelectionDialog
 import com.theveloper.pixelplay.data.preferences.AiPreferencesRepository
+import com.theveloper.pixelplay.data.preferences.StreamingAudioQuality
+import com.theveloper.pixelplay.data.preferences.AlbumArtQuality
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.Date
@@ -232,6 +234,9 @@ fun SettingsCategoryScreen(
     }
     var albumArtCacheLimitDraft by remember(uiState.albumArtCacheLimitMb) {
         mutableStateOf(uiState.albumArtCacheLimitMb.toFloat())
+    }
+    var storageLimitDraft by remember(uiState.storageLimitMb) {
+        mutableStateOf(uiState.storageLimitMb.toFloat())
     }
 
     val exportLauncher = rememberLauncherForActivityResult(
@@ -515,6 +520,60 @@ fun SettingsCategoryScreen(
                                     subtitle = stringResource(R.string.setcat_reset_imported_lyrics_subtitle),
                                     leadingIcon = { Icon(Icons.Outlined.ClearAll, null, tint = MaterialTheme.colorScheme.secondary) },
                                     onClick = { showClearLyricsDialog = true }
+                                )
+                            }
+
+                            SettingsSubsection(title = stringResource(R.string.presentation_batch_f_exp_visual_quality)) {
+                                ThemeSelectorItem(
+                                    label = stringResource(R.string.setcat_album_art_quality_wifi_title),
+                                    description = stringResource(R.string.setcat_album_art_quality_wifi_desc),
+                                    options = mapOf(
+                                        AlbumArtQuality.LOW.name to stringResource(R.string.presentation_batch_f_album_art_quality_low_line),
+                                        AlbumArtQuality.MEDIUM.name to stringResource(R.string.presentation_batch_f_album_art_quality_medium_line),
+                                        AlbumArtQuality.HIGH.name to stringResource(R.string.presentation_batch_f_album_art_quality_high_line),
+                                        AlbumArtQuality.ORIGINAL.name to stringResource(R.string.presentation_batch_f_album_art_quality_original_line)
+                                    ),
+                                    selectedKey = uiState.albumArtQuality.name,
+                                    onSelectionChanged = { key ->
+                                        settingsViewModel.setAlbumArtQuality(AlbumArtQuality.valueOf(key))
+                                    },
+                                    leadingIcon = { Icon(painterResource(R.drawable.rounded_wifi_24), null, tint = MaterialTheme.colorScheme.secondary) }
+                                )
+                                ThemeSelectorItem(
+                                    label = stringResource(R.string.setcat_album_art_quality_mobile_title),
+                                    description = stringResource(R.string.setcat_album_art_quality_mobile_desc),
+                                    options = mapOf(
+                                        AlbumArtQuality.LOW.name to stringResource(R.string.presentation_batch_f_album_art_quality_low_line),
+                                        AlbumArtQuality.MEDIUM.name to stringResource(R.string.presentation_batch_f_album_art_quality_medium_line),
+                                        AlbumArtQuality.HIGH.name to stringResource(R.string.presentation_batch_f_album_art_quality_high_line),
+                                        AlbumArtQuality.ORIGINAL.name to stringResource(R.string.presentation_batch_f_album_art_quality_original_line)
+                                    ),
+                                    selectedKey = uiState.albumArtQualityMobile.name,
+                                    onSelectionChanged = { key ->
+                                        settingsViewModel.setAlbumArtQualityMobile(AlbumArtQuality.valueOf(key))
+                                    },
+                                    leadingIcon = { Icon(painterResource(R.drawable.rounded_mobile_speaker_24), null, tint = MaterialTheme.colorScheme.secondary) }
+                                )
+                            }
+
+                            SettingsSubsection(title = stringResource(R.string.setcat_music_storage_limit_title)) {
+                                SliderSettingsItem(
+                                    label = stringResource(R.string.setcat_music_storage_limit_desc),
+                                    value = storageLimitDraft,
+                                    valueRange = 0f..10240f,
+                                    steps = 20,
+                                    onValueChange = { storageLimitDraft = it },
+                                    onValueChangeFinished = {
+                                        val selectedLimit = storageLimitDraft.toInt()
+                                        if (selectedLimit != uiState.storageLimitMb) {
+                                            settingsViewModel.setStorageLimitMb(selectedLimit)
+                                        }
+                                    },
+                                    valueText = { value ->
+                                        if (value.toInt() == 0) "Unlimited"
+                                        else if (value >= 1024) "${(value / 1024).toInt()} GB"
+                                        else "${value.toInt()} MB"
+                                    }
                                 )
                             }
                         }
@@ -830,6 +889,42 @@ fun SettingsCategoryScreen(
                                 )
                             }
 
+                            SettingsSubsection(title = stringResource(R.string.setcat_streaming_title)) {
+                                ThemeSelectorItem(
+                                    label = stringResource(R.string.setcat_streaming_audio_quality_wifi_title),
+                                    description = stringResource(R.string.setcat_streaming_audio_quality_wifi_desc),
+                                    options = StreamingAudioQuality.entries.associate { it.name to it.label },
+                                    selectedKey = uiState.streamingAudioQualityWifi.name,
+                                    onSelectionChanged = { key ->
+                                        settingsViewModel.setStreamingAudioQualityWifi(StreamingAudioQuality.valueOf(key))
+                                    },
+                                    leadingIcon = { Icon(painterResource(R.drawable.rounded_wifi_24), null, tint = MaterialTheme.colorScheme.secondary) }
+                                )
+                                ThemeSelectorItem(
+                                    label = stringResource(R.string.setcat_streaming_audio_quality_mobile_title),
+                                    description = stringResource(R.string.setcat_streaming_audio_quality_mobile_desc),
+                                    options = StreamingAudioQuality.entries.associate { it.name to it.label },
+                                    selectedKey = uiState.streamingAudioQualityMobile.name,
+                                    onSelectionChanged = { key ->
+                                        settingsViewModel.setStreamingAudioQualityMobile(StreamingAudioQuality.valueOf(key))
+                                    },
+                                    leadingIcon = { Icon(painterResource(R.drawable.rounded_mobile_speaker_24), null, tint = MaterialTheme.colorScheme.secondary) }
+                                )
+                                SwitchSettingItem(
+                                    title = stringResource(R.string.setcat_force_high_quality_mobile_title),
+                                    subtitle = stringResource(R.string.setcat_force_high_quality_mobile_desc),
+                                    checked = uiState.forceHighQualityOnMobile,
+                                    onCheckedChange = { settingsViewModel.setForceHighQualityOnMobile(it) },
+                                    leadingIcon = { Icon(painterResource(R.drawable.outline_high_quality_24), null, tint = MaterialTheme.colorScheme.secondary) }
+                                )
+                                SwitchSettingItem(
+                                    title = stringResource(R.string.setcat_cache_liked_songs_title),
+                                    subtitle = stringResource(R.string.setcat_cache_liked_songs_desc),
+                                    checked = uiState.cacheLikedSongsOffline,
+                                    onCheckedChange = { settingsViewModel.setCacheLikedSongsOffline(it) },
+                                    leadingIcon = { Icon(painterResource(R.drawable.round_favorite_border_24), null, tint = MaterialTheme.colorScheme.secondary) }
+                                )
+                            }
                         }
                         SettingsCategory.BEHAVIOR -> {
                             SettingsSubsection(

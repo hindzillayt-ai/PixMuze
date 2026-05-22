@@ -37,6 +37,21 @@ import coil.size.Size // Import Coil's Size
 import coil.compose.SubcomposeAsyncImage
 import coil.compose.SubcomposeAsyncImageContent
 import com.theveloper.pixelplay.R
+import androidx.compose.runtime.collectAsState
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
+import dagger.hilt.android.EntryPointAccessors
+import dagger.hilt.components.SingletonComponent
+import com.theveloper.pixelplay.presentation.viewmodel.ConnectivityStateHolder
+import com.theveloper.pixelplay.data.preferences.UserPreferencesRepository
+import com.theveloper.pixelplay.data.preferences.AlbumArtQuality
+
+@EntryPoint
+@InstallIn(SingletonComponent::class)
+interface SmartImageEntryPoint {
+    fun connectivityStateHolder(): ConnectivityStateHolder
+    fun userPreferencesRepository(): UserPreferencesRepository
+}
 
 val SmartImageCompactListTargetSize = Size(96, 96)
 val SmartImageListTargetSize = Size(128, 128)
@@ -63,9 +78,32 @@ fun SmartImage(
     onState: ((AsyncImagePainter.State) -> Unit)? = null
 ) {
     val context = LocalContext.current
+    val appContext = context.applicationContext
+    val entryPoint = remember(appContext) {
+        EntryPointAccessors.fromApplication(appContext, SmartImageEntryPoint::class.java)
+    }
+    val connectivityStateHolder = entryPoint.connectivityStateHolder()
+    val userPreferencesRepository = entryPoint.userPreferencesRepository()
+
+    val isMeteredNetwork by connectivityStateHolder.isMeteredNetwork.collectAsState()
+    val albumArtQualityWifi by userPreferencesRepository.albumArtQualityFlow.collectAsState(initial = AlbumArtQuality.MEDIUM)
+    val albumArtQualityMobile by userPreferencesRepository.albumArtQualityMobileFlow.collectAsState(initial = AlbumArtQuality.LOW)
+
+    val effectiveQuality = if (isMeteredNetwork) albumArtQualityMobile else albumArtQualityWifi
+
     val clippedModifier = modifier.clip(shape)
-    val requestTargetSize = remember(targetSize) {
-        safeAlbumArtTargetSize(targetSize)
+    val requestTargetSize = remember(targetSize, effectiveQuality) {
+        val baseSize = safeAlbumArtTargetSize(targetSize)
+        val maxSize = effectiveQuality.maxSize
+        if (maxSize > 0) {
+            val widthPx = (baseSize.width as? coil.size.Dimension.Pixels)?.px ?: maxSize
+            val heightPx = (baseSize.height as? coil.size.Dimension.Pixels)?.px ?: maxSize
+            val clampedW = if (widthPx > maxSize) maxSize else widthPx
+            val clampedH = if (heightPx > maxSize) maxSize else heightPx
+            Size(clampedW, clampedH)
+        } else {
+            baseSize
+        }
     }
 
     // Handle direct models (Bitmap, Vector, etc) early to avoid ImageRequest overhead

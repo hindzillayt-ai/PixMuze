@@ -14,7 +14,7 @@ import java.io.IOException
 import java.net.URL
 
 object DownloadHelper {
-    private val client = OkHttpClient()
+    private val client = YoutubeHelper.client
 
     suspend fun downloadImage(context: Context, imageUrl: String, id: String): File? {
         return withContext(Dispatchers.IO) {

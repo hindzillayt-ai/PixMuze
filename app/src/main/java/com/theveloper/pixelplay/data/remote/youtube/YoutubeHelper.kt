@@ -27,7 +27,9 @@ import java.io.File
 import java.util.Locale
 
 object YoutubeHelper {
-    private val client = OkHttpClient()
+    val client = OkHttpClient.Builder()
+        .connectionPool(okhttp3.ConnectionPool(10, 5, java.util.concurrent.TimeUnit.MINUTES))
+        .build()
 
     /**
      * LRU cache for resolved YouTube stream URLs.

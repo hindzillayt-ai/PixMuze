@@ -61,4 +61,12 @@ interface LocalSongDataSource {
     /** Update the genre for a song. */
     @Query("UPDATE songs SET genre = :genre WHERE youtubeId = :songId")
     suspend fun updateGenre(songId: String, genre: String)
+
+    /** Update the audio file path for a song. */
+    @Query("UPDATE songs SET audioFilePath = :audioPath WHERE youtubeId = :songId")
+    suspend fun updateAudioPath(songId: String, audioPath: String)
+
+    /** Get songs without a genre fetched yet. */
+    @Query("SELECT * FROM songs WHERE genre IS NULL OR genre = ''")
+    suspend fun getSongsWithoutGenre(): List<Song>
 }

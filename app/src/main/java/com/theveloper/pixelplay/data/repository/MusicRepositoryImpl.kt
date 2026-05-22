@@ -26,6 +26,14 @@ import com.theveloper.pixelplay.data.database.FavoritesDao
 import com.theveloper.pixelplay.data.database.MusicDao
 import com.theveloper.pixelplay.data.database.SearchHistoryDao
 import com.theveloper.pixelplay.data.database.SearchHistoryEntity
+import com.theveloper.pixelplay.data.database.AlbumEntity
+import com.theveloper.pixelplay.data.database.ArtistEntity
+import com.theveloper.pixelplay.data.database.SourceType
+import com.theveloper.pixelplay.data.database.SongEntity
+import com.theveloper.pixelplay.data.model.ArtistRef
+import org.json.JSONArray
+import org.json.JSONObject
+import kotlin.math.absoluteValue
 import com.theveloper.pixelplay.data.database.TelegramChannelEntity
 import com.theveloper.pixelplay.data.database.TelegramDao
 import com.theveloper.pixelplay.data.database.toAlbum
@@ -304,6 +312,14 @@ class MusicRepositoryImpl @Inject constructor(
     override suspend fun getRandomSongs(limit: Int): List<Song> = withContext(Dispatchers.IO) {
         val filter = cachedDirFilter.value
         musicDao.getRandomSongs(limit, filter.allowedParentDirs, filter.applyFilter).map { it.toSong() }
+    }
+
+    override suspend fun getSongsByGenre(genre: String, excludeId: Long, limit: Int): List<Song> = withContext(Dispatchers.IO) {
+        musicDao.getSongsByGenre(genre, excludeId, limit).map { it.toSong() }
+    }
+
+    override suspend fun getSongsByArtistName(artistName: String, limit: Int): List<Song> = withContext(Dispatchers.IO) {
+        musicDao.getSongsByArtistName(artistName, limit).map { it.toSong() }
     }
 
     override suspend fun getSongsPage(
@@ -857,9 +873,222 @@ class MusicRepositoryImpl @Inject constructor(
         ).first().map { it.toArtist() }
     }
 
+    private fun toUnifiedYoutubeSongId(youtubeId: String): Long {
+        return -(15_000_000_000_000L + youtubeId.hashCode().toLong().absoluteValue)
+    }
+
+    private fun toUnifiedYoutubeAlbumId(albumName: String): Long {
+        return -(16_000_000_000_000L + albumName.lowercase().hashCode().toLong().absoluteValue)
+    }
+
+    private fun toUnifiedYoutubeArtistId(artistName: String): Long {
+        return -(17_000_000_000_000L + artistName.lowercase().hashCode().toLong().absoluteValue)
+    }
+
+    private fun parseYoutubeArtistNames(rawArtist: String): List<String> {
+        if (rawArtist.isBlank()) return listOf("Unknown Artist")
+        val parsed = rawArtist.split(Regex("\\s*[,/&;+、]\\s*"))
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+        return if (parsed.isEmpty()) listOf("Unknown Artist") else parsed
+    }
+
+    private fun parseDurationStringToMillis(durationStr: String): Long {
+        if (durationStr.isBlank()) return 0L
+        val parts = durationStr.split(":")
+        return try {
+            when (parts.size) {
+                1 -> parts[0].toLong() * 1000L
+                2 -> (parts[0].toLong() * 60L + parts[1].toLong()) * 1000L
+                3 -> ((parts[0].toLong() * 3600L + parts[1].toLong() * 60L + parts[2].toLong())) * 1000L
+                else -> 0L
+            }
+        } catch (e: Exception) {
+            0L
+        }
+    }
+
+    private suspend fun insertYoutubeSongSkeleton(
+        youtubeId: String,
+        title: String,
+        artist: String,
+        thumbnailUrl: String?,
+        duration: Long,
+        genre: String?
+    ) {
+        val songId = toUnifiedYoutubeSongId(youtubeId)
+        val artistNames = parseYoutubeArtistNames(artist)
+        val primaryArtistName = artistNames.firstOrNull() ?: "Unknown Artist"
+        val primaryArtistId = toUnifiedYoutubeArtistId(primaryArtistName)
+
+        val artistsToInsert = artistNames.map { name ->
+            ArtistEntity(
+                id = toUnifiedYoutubeArtistId(name),
+                name = name,
+                trackCount = 0,
+                imageUrl = null
+            )
+        }
+
+        val crossRefsToInsert = artistNames.mapIndexed { index, name ->
+            val artistId = toUnifiedYoutubeArtistId(name)
+            com.theveloper.pixelplay.data.database.SongArtistCrossRef(
+                songId = songId,
+                artistId = artistId,
+                isPrimary = index == 0
+            )
+        }
+
+        val albumId = toUnifiedYoutubeAlbumId("YouTube Music")
+        val albumName = "YouTube Music"
+        val albumToInsert = AlbumEntity(
+            id = albumId,
+            title = albumName,
+            artistName = primaryArtistName,
+            artistId = primaryArtistId,
+            songCount = 0,
+            dateAdded = System.currentTimeMillis(),
+            year = 0,
+            albumArtUriString = thumbnailUrl
+        )
+
+        // Build artists JSON
+        val youtubeArtistRefs = artistNames.mapIndexed { idx, name ->
+            ArtistRef(
+                id = toUnifiedYoutubeArtistId(name),
+                name = name,
+                isPrimary = idx == 0
+            )
+        }
+        val artistsJson = try {
+            val arr = JSONArray()
+            youtubeArtistRefs.forEach { ref ->
+                val obj = JSONObject()
+                obj.put("id", ref.id)
+                obj.put("name", ref.name)
+                obj.put("primary", ref.isPrimary)
+                arr.put(obj)
+            }
+            arr.toString()
+        } catch (e: Exception) {
+            null
+        }
+
+        val songEntity = SongEntity(
+            id = songId,
+            title = title,
+            artistName = artist.ifBlank { primaryArtistName },
+            artistId = primaryArtistId,
+            albumArtist = null,
+            albumName = albumName,
+            albumId = albumId,
+            contentUriString = "youtube://$youtubeId",
+            albumArtUriString = thumbnailUrl,
+            duration = duration,
+            genre = genre?.takeIf { it.isNotBlank() } ?: "YouTube Music",
+            filePath = "",
+            parentDirectoryPath = "youtube://",
+            isFavorite = true,
+            lyrics = null,
+            trackNumber = 0,
+            year = 0,
+            dateAdded = System.currentTimeMillis(),
+            mimeType = "audio/webm",
+            bitrate = null,
+            sampleRate = null,
+            telegramChatId = null,
+            telegramFileId = null,
+            artistsJson = artistsJson,
+            sourceType = SourceType.YOUTUBE
+        )
+
+        musicDao.incrementalSyncMusicData(
+            songs = listOf(songEntity),
+            albums = listOf(albumToInsert),
+            artists = artistsToInsert,
+            crossRefs = crossRefsToInsert,
+            deletedSongIds = emptyList()
+        )
+    }
+
     override suspend fun setFavoriteStatus(songId: String, isFavorite: Boolean) = withContext(Dispatchers.IO) {
-        val id = songId.toLongOrNull() ?: return@withContext
+        val youtubeId = if (songId.startsWith("youtube_")) {
+            songId.substringAfter("youtube_")
+        } else if (songId.toLongOrNull() == null) {
+            songId
+        } else {
+            null
+        }
+
+        val id = if (youtubeId != null) {
+            toUnifiedYoutubeSongId(youtubeId)
+        } else {
+            songId.toLongOrNull() ?: return@withContext
+        }
+
         if (isFavorite) {
+            if (youtubeId != null) {
+                val exists = musicDao.getSongsByIdsListSimple(listOf(id)).isNotEmpty()
+                if (!exists) {
+                    val ytDb = com.theveloper.pixelplay.data.database.youtube.AppDatabase.getInstance(context)
+                    val ytSong = ytDb.songRepository().getSong(youtubeId)
+                    if (ytSong != null) {
+                        insertYoutubeSongSkeleton(
+                            youtubeId = youtubeId,
+                            title = ytSong.title,
+                            artist = ytSong.artist,
+                            thumbnailUrl = ytSong.thumbnailPath ?: ytSong.thumbnailHref,
+                            duration = parseDurationStringToMillis(ytSong.duration),
+                            genre = ytSong.genre ?: "YouTube Music"
+                        )
+                    } else {
+                        insertYoutubeSongSkeleton(
+                            youtubeId = youtubeId,
+                            title = "YouTube Video",
+                            artist = "Unknown Artist",
+                            thumbnailUrl = null,
+                            duration = 0L,
+                            genre = "YouTube Music"
+                        )
+                    }
+                }
+            }
+
+            favoritesDao.setFavorite(
+                com.theveloper.pixelplay.data.database.FavoritesEntity(
+                    songId = id,
+                    isFavorite = true
+                )
+            )
+        } else {
+            favoritesDao.removeFavorite(id)
+        }
+    }
+
+    override suspend fun setFavoriteStatusWithMetadata(song: Song, isFavorite: Boolean) = withContext(Dispatchers.IO) {
+        val youtubeId = song.youtubeId ?: if (song.id.startsWith("youtube_")) song.id.substringAfter("youtube_") else null
+        val id = if (youtubeId != null) {
+            toUnifiedYoutubeSongId(youtubeId)
+        } else {
+            song.id.toLongOrNull() ?: return@withContext
+        }
+
+        if (isFavorite) {
+            if (youtubeId != null) {
+                val exists = musicDao.getSongsByIdsListSimple(listOf(id)).isNotEmpty()
+                if (!exists) {
+                    insertYoutubeSongSkeleton(
+                        youtubeId = youtubeId,
+                        title = song.title,
+                        artist = song.artist,
+                        thumbnailUrl = song.albumArtUriString,
+                        duration = song.duration,
+                        genre = song.genre ?: "YouTube Music"
+                    )
+                }
+            }
+
             favoritesDao.setFavorite(
                 com.theveloper.pixelplay.data.database.FavoritesEntity(
                     songId = id,
@@ -872,23 +1101,49 @@ class MusicRepositoryImpl @Inject constructor(
     }
 
     override suspend fun getFavoriteSongIdsOnce(): Set<String> = withContext(Dispatchers.IO) {
-        favoritesDao.getFavoriteSongIdsOnce()
-            .map { it.toString() }
-            .toSet()
+        val ids = favoritesDao.getFavoriteSongIdsOnce()
+        val idStrings = ids.map { it.toString() }.toMutableSet()
+        val youtubeSongs = musicDao.getSongsByIdsListSimple(ids)
+        youtubeSongs.forEach { item ->
+            if (item.contentUriString.startsWith("youtube://")) {
+                val ytId = item.contentUriString.removePrefix("youtube://")
+                idStrings.add("youtube_$ytId")
+            }
+        }
+        idStrings
     }
 
     override fun getFavoriteSongIdsFlow(): Flow<Set<String>> {
         return favoritesDao.getFavoriteSongIds()
-            .map { ids -> ids.asSequence().map(Long::toString).toSet() }
+            .map { ids ->
+                val idStrings = ids.asSequence().map(Long::toString).toMutableSet()
+                val youtubeSongs = musicDao.getSongsByIdsListSimple(ids)
+                youtubeSongs.forEach { item ->
+                    if (item.contentUriString.startsWith("youtube://")) {
+                        val ytId = item.contentUriString.removePrefix("youtube://")
+                        idStrings.add("youtube_$ytId")
+                    }
+                }
+                idStrings.toSet()
+            }
             .distinctUntilChanged()
     }
 
     override suspend fun toggleFavoriteStatus(songId: String): Boolean = withContext(Dispatchers.IO) {
-        val id = songId.toLongOrNull() ?: return@withContext false
+        val youtubeId = if (songId.startsWith("youtube_")) songId.substringAfter("youtube_") else null
+        val id = if (youtubeId != null) {
+            toUnifiedYoutubeSongId(youtubeId)
+        } else {
+            songId.toLongOrNull() ?: return@withContext false
+        }
         val isFav = favoritesDao.isFavorite(id) ?: false
         val newFav = !isFav
         setFavoriteStatus(songId, newFav)
         return@withContext newFav
+    }
+
+    override suspend fun updateSongFilePath(songId: Long, filePath: String) = withContext(Dispatchers.IO) {
+        musicDao.updateSongFilePath(songId, filePath)
     }
 
     override fun getSong(songId: String): Flow<Song?> {

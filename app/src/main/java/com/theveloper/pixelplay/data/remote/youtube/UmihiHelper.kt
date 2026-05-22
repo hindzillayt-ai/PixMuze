@@ -51,7 +51,7 @@ object UmihiHelper {
     suspend fun fetchArtworkBytes(url: String): ByteArray? {
         return withContext(Dispatchers.IO) {
             try {
-                val client = OkHttpClient()
+                val client = YoutubeHelper.client
 
                 val request = Request.Builder()
                     .url(url)

@@ -96,6 +96,9 @@ interface MusicRepository {
      */
     suspend fun getRandomSongs(limit: Int): List<Song>
 
+    suspend fun getSongsByGenre(genre: String, excludeId: Long = 0, limit: Int = 10): List<Song>
+    suspend fun getSongsByArtistName(artistName: String, limit: Int = 5): List<Song>
+
     /**
      * Returns a bounded song page without materializing the full library.
      */
@@ -269,6 +272,11 @@ interface MusicRepository {
     suspend fun setFavoriteStatus(songId: String, isFavorite: Boolean)
 
     /**
+     * Setea explícitamente el estado favorito de una canción, persistiendo metadatos para canciones de YouTube si es necesario.
+     */
+    suspend fun setFavoriteStatusWithMetadata(song: Song, isFavorite: Boolean)
+
+    /**
      * Obtiene IDs de canciones favoritas directamente desde Room (tabla favorites).
      */
     suspend fun getFavoriteSongIdsOnce(): Set<String>
@@ -277,6 +285,11 @@ interface MusicRepository {
      * Reactive stream of favorite song IDs from Room favorites table.
      */
     fun getFavoriteSongIdsFlow(): Flow<Set<String>>
+
+    /**
+     * Updates the local file path of a song.
+     */
+    suspend fun updateSongFilePath(songId: Long, filePath: String)
 
     /**
      * Obtiene una canción específica por su ID.

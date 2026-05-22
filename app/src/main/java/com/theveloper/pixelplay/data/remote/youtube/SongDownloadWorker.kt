@@ -170,6 +170,5 @@ class SongDownloadWorker(
     companion object {
         const val PLAYLIST_KEY = "playlist"
         const val SONG_KEY = "song"
-        private val client = OkHttpClient()
     }
 }
