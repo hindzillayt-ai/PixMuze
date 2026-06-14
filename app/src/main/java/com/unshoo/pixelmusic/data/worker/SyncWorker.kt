@@ -1645,6 +1645,30 @@ constructor(
             var remotePlaylistsSuccess = false
             try {
                 val remotePlaylists = YoutubePlaylistDataSource().retrieveAll(settings)
+                // ArchiveTune-style: surface playlist cards immediately from the lightweight
+                // library page before fetching every playlist's songs. This makes login/library
+                // feel instant instead of waiting for all remote playlist details.
+                val currentUserPlaylists = playlistPreferencesRepository.getPlaylistsOnce()
+                remotePlaylists.forEach { playlistInfo ->
+                    val cover = com.unshoo.pixelmusic.data.remote.youtube.upgradeThumbnailUrlToHighQuality(
+                        playlistInfo.coverPath ?: playlistInfo.coverHref
+                    )
+                    val existing = currentUserPlaylists.find { it.id == playlistInfo.id }
+                    if (existing == null) {
+                        playlistPreferencesRepository.createPlaylist(
+                            name = playlistInfo.title,
+                            songIds = emptyList(),
+                            coverImageUri = cover,
+                            customId = playlistInfo.id,
+                            source = "YOUTUBE"
+                        )
+                    } else if (existing.name != playlistInfo.title || existing.coverImageUri != cover) {
+                        playlistPreferencesRepository.updatePlaylist(
+                            existing.copy(name = playlistInfo.title, coverImageUri = cover)
+                        )
+                    }
+                }
+
                 remotePlaylists.forEach { playlistInfo ->
                     val existingPlaylist = appDatabase.playlistRepository().getPlaylistById(playlistInfo.id)
                     val existingSongCount = existingPlaylist?.info?.lastSyncSongCount ?: 0
@@ -1884,9 +1908,10 @@ constructor(
                 }
             }
 
-            // 4. Two-way Playlist Sync (Sync local created playlists to YouTube)
+            // 4. Optional two-way Playlist Sync (Sync local created playlists to YouTube)
             try {
-                if (settings.cookies.raw.isNotBlank()) {
+                val uploadSyncEnabled = userPreferencesRepository.youtubePlaylistUploadSyncEnabledFlow.first()
+                if (settings.cookies.raw.isNotBlank() && uploadSyncEnabled) {
                     val remotePlaylists = YoutubePlaylistDataSource().retrieveAll(settings)
                     val localPlaylists = allPlaylists.filter { it.source == "LOCAL" || it.source == "SMART" }
                     

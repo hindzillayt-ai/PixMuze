@@ -7,6 +7,8 @@ import com.unshoo.pixelmusic.data.database.MusicDao
 import com.unshoo.pixelmusic.data.database.toArtist
 import com.unshoo.pixelmusic.data.model.Artist
 import com.unshoo.pixelmusic.data.model.Song
+import com.unshoo.pixelmusic.data.repository.MusicRepository
+import com.unshoo.pixelmusic.data.telegram.TelegramRepository
 import com.unshoo.pixelmusic.data.service.wear.PhoneWatchTransferState
 import com.unshoo.pixelmusic.data.service.wear.PhoneWatchTransferStateStore
 import com.unshoo.pixelmusic.data.service.wear.WearPhoneTransferSender
@@ -34,6 +36,8 @@ class SongInfoBottomSheetViewModel @Inject constructor(
     private val wearPhoneTransferSender: WearPhoneTransferSender,
     private val transferStateStore: PhoneWatchTransferStateStore,
     private val musicDao: MusicDao,
+    private val musicRepository: MusicRepository,
+    private val telegramRepository: TelegramRepository,
     private val downloadRepository: com.unshoo.pixelmusic.data.remote.youtube.DownloadRepository,
 ) : ViewModel() {
 
@@ -223,13 +227,19 @@ class SongInfoBottomSheetViewModel @Inject constructor(
         _isSongDownloading.value = false
 
         val youtubeId = song.youtubeId
-        if (youtubeId == null) {
+        val telegramFileId = song.telegramFileId
+        if (youtubeId == null && telegramFileId == null) {
             return
         }
 
         downloadJob?.cancel()
         downloadJob = viewModelScope.launch {
             // Initial check
+            if (telegramFileId != null) {
+                _isSongDownloaded.value = telegramRepository.isFileCached(telegramFileId)
+                return@launch
+            }
+            if (youtubeId == null) return@launch
             _isSongDownloaded.value = downloadRepository.isSongDownloaded(youtubeId)
 
             // Observe the work manager flow for this song
@@ -279,10 +289,23 @@ class SongInfoBottomSheetViewModel @Inject constructor(
         }
     }
 
+    fun downloadTelegramSong(song: Song) {
+        val fileId = song.telegramFileId ?: return
+        viewModelScope.launch {
+            _isSongDownloading.value = true
+            val path = runCatching { telegramRepository.downloadFileAwait(fileId, priority = 16) }.getOrNull()
+            _isSongDownloaded.value = !path.isNullOrBlank()
+            _isSongDownloading.value = false
+        }
+    }
+
     fun deleteYoutubeSong(song: Song) {
         val youtubeId = song.youtubeId ?: return
         viewModelScope.launch {
             downloadRepository.deleteSong(youtubeId)
+            // Also remove the unified library row for downloaded YouTube songs so the item
+            // disappears immediately instead of staying until a later sync.
+            song.id.toLongOrNull()?.let { runCatching { musicRepository.deleteById(it) } }
             _isSongDownloaded.value = false
             _isSongDownloading.value = false
         }
